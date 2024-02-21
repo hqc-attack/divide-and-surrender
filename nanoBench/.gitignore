@@ -1,0 +1,24 @@
+# Catch all's
+*.cmd
+*.o
+*.o.ur-safe
+*.mod
+*.dwo
+*.pyc
+*.html
+*.xml
+*.asm
+*.s
+*.tar.gz
+.vscode
+
+# Kernel ignore files/directories
+kernel/.cache.mk
+kernel/.tmp_versions/
+kernel/Module.symvers
+kernel/modules.order
+kernel/nb.ko
+kernel/nb.mod.c
+
+# User ignore files
+user/nanoBench

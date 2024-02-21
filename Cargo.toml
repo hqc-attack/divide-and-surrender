@@ -1,0 +1,39 @@
+[package]
+name = "hqc-improved-pc-oracle-attack"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.79"
+bit-set = "0.5.3"
+bytemuck = "1.13.1"
+clap = { version = "4.4.18", features = ["derive"] }
+crossbeam = "0.8.2"
+ctrlc = "3.4.0"
+hex-literal = "0.4.1"
+itertools = "0.10.5"
+nix = { version = "0.26.2", features = ["sched"] }
+num-integer = "0.1.45"
+num_cpus = "1.15.0"
+oqs = { path = "liboqs-rust/oqs", features = ["hqc", "hqc_r4"] }
+oqs-sys = { path = "./liboqs-rust/oqs-sys" }
+perf-event = "0.4.8"
+rand = "0.8.5"
+rand_chacha = "0.3.1"
+rayon = "1.7.0"
+rug = "1.23.0"
+serde = { version = "1.0.193", features = ["serde_derive"] }
+serde_json = "1.0.108"
+sha2 = { version = "0.10.6", features = ["asm"] }
+spin = "0.9.8"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+[build-dependencies]
+cc = "1.0.79"
+
+
+# [profile.release]
+# debug = true

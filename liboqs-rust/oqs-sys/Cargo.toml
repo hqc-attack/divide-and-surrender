@@ -1,0 +1,47 @@
+[package]
+name = "oqs-sys"
+version = "0.7.2"
+authors = ["Thom Wiggers <thom@thomwiggers.nl>"]
+edition = "2021"
+links = "oqs"
+description = "Bindings to liboqs"
+readme = "../README.md"
+repository = "https://github.com/open-quantum-safe/liboqs-rust"
+license = "MIT OR Apache-2.0"
+
+# Exclude certain liboqs files
+exclude = ["liboqs/tests/**", "liboqs/docs/**", "liboqs/scripts/**"]
+include = ["liboqs/.Cmake/**"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+libc = "0.2"
+
+[build-dependencies]
+cmake = "0.1"
+bindgen = "0.65"
+build-deps = "0.1"
+
+[features]
+default = ["openssl", "hqc"]
+openssl = []
+docs = []
+non_portable = []
+# algorithms: KEMs
+kems = ["classic_mceliece", "frodokem", "hqc", "hqc_r4", "kyber", "ntruprime"]
+bike = []  # BIKE is enabled by build.rs on non-windows targets
+classic_mceliece = []
+frodokem = []
+hqc = []
+hqc_r4 = []
+kyber = []
+ntruprime = []
+# algorithms: Signature schemes
+sigs = ["dilithium", "falcon", "sphincs"]
+dilithium = []
+falcon = []
+sphincs = []
+
+[package.metadata.docs.rs]
+features = ["docs"]

@@ -1,0 +1,20 @@
+[project]
+name = "hqc-improved-pc-oracle-attack"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "anonymous", email = "anonymous@anonymous"},
+]
+dependencies = [
+    "seaborn>=0.13.1",
+    "pandas>=2.2.0",
+    "matplotlib>=3.8.2",
+    "numpy>=1.26.3",
+]
+requires-python = "==3.11.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
