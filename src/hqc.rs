@@ -395,47 +395,44 @@ pub trait Hqc {
         }
     }
 
-    fn find_low_division_latency_salt(rng: &mut impl Rng, pk: PublicKeyRef, msg: &[u8]) -> Vec<u8> {
+    fn find_low_division_latency_salt(rng: &mut impl Rng, pk: PublicKeyRef, msg: &[u8], min_diff: u32) -> (Vec<u8>, u32) {
         let start = Instant::now();
         let mut lowest_salt = None;
-        let mut lowest_latency = u32::MAX;
+        let mut lowest_latency = None;
         let mut latencies = vec![];
         let mut its = 0;
         for _ in 0..5000 {
             let mut salt = vec![0u8; Self::VEC_K_SIZE_BYTES];
             rng.fill(salt.as_mut_slice());
             let latency = Self::division_latency(msg, pk.as_ref(), &salt);
-            its += 1;
-            if latency < lowest_latency {
-                lowest_salt = Some(salt);
-                lowest_latency = latency;
-            }
             latencies.push(latency);
         }
         latencies.sort_unstable();
         let median_latency = latencies[latencies.len() / 2];
         loop {
-            let diff = median_latency - lowest_latency;
-            if diff >= 55 {
-                break;
+            if let Some(lowest_latency) = lowest_latency {
+                let diff = median_latency.saturating_sub(lowest_latency);
+                if diff > min_diff || (lowest_latency == median_latency && min_diff == 0) {
+                    break;
+                }
             }
             let mut salt = vec![0u8; Self::VEC_K_SIZE_BYTES];
             rng.fill(salt.as_mut_slice());
             let latency = Self::division_latency(msg, pk.as_ref(), &salt);
             its += 1;
-            if latency < lowest_latency {
+            if lowest_latency.is_none() || latency < lowest_latency.unwrap() {
                 debug!(
                     "New lower latency: {latency} with diff {}",
-                    median_latency - lowest_latency
+                    median_latency - latency
                 );
                 lowest_salt = Some(salt);
-                lowest_latency = latency;
+                lowest_latency = Some(latency);
             }
         }
-        let diff = median_latency - lowest_latency;
+        let diff = median_latency - lowest_latency.unwrap();
         let dur = start.elapsed();
-        debug!("using salt with division latency {lowest_latency} (median is {median_latency} with diff {diff}). Found after 2^{:.02} iterations in {dur:.02?} ({:.02} iter/s).", (its as f64).log2(), its as f64 / dur.as_secs_f64());
-        lowest_salt.unwrap()
+        debug!("using salt with division latency {} (median is {median_latency} with diff {diff}). Found after 2^{:.02} iterations in {dur:.02?} ({:.02} iter/s).", lowest_latency.unwrap(), (its as f64).log2(), its as f64 / dur.as_secs_f64());
+        (lowest_salt.unwrap(), diff)
     }
 
     const DIVISION_LATENCY: unsafe extern "C" fn(

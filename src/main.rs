@@ -10,14 +10,14 @@ use std::{
     collections::HashMap,
     error::Error,
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     marker::PhantomData,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Condvar,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc, Condvar, Mutex,
     },
-    thread::{self},
+    thread,
     time::Instant,
 };
 use tracing::{debug, error, info, info_span};
@@ -27,7 +27,10 @@ use bit_set::BitSet;
 
 use hqc::{Ct, Hqc};
 
-use nix::{sched::{sched_getaffinity, sched_setaffinity, CpuSet}, unistd::Pid};
+use nix::{
+    sched::{sched_getaffinity, sched_setaffinity, CpuSet},
+    unistd::Pid,
+};
 use num_integer::binomial;
 use oqs::kem::{Ciphertext, PublicKeyRef, SecretKey, SecretKeyRef};
 
@@ -152,12 +155,12 @@ fn measure_timing<T: Hqc + Send>(
     core_alloc: &CoreHandle<'_>,
     sk: &SecretKey,
     ct: &Ct,
+    n: u32,
 ) -> (u64, u64) {
     let ctr: Ciphertext = T::ciphertext_to_string(ct);
     let start = Arc::new(Barrier::<Spin>::new(2));
     let stop = Arc::new(Barrier::<Spin>::new(2));
     let done_decaps = Arc::new(AtomicBool::new(false));
-    let n = 100;
     let (smt_a, smt_b) = get_sibling();
     let off = core_alloc.core;
     let (smt_a, smt_b) = (smt_a + off, smt_b + off);
@@ -193,7 +196,7 @@ fn measure_timing<T: Hqc + Send>(
     sched_setaffinity(Pid::from_raw(0), &cpu_set).unwrap();
     thread::yield_now();
     let mut measurements = vec![0u32; 30000];
-    let mut runtimes = Vec::with_capacity(n);
+    let mut runtimes = Vec::with_capacity(n.try_into().unwrap());
     let division_thresh = 100; // TODO: make this a parameter? or learn it too
     let max_delta = 300;
     let mut trace_id = 0;
@@ -297,6 +300,10 @@ fn calibrate<T: Hqc + Send>(
     sk: &SecretKey,
     fast: &Ct,
     mut other: impl FnMut() -> Ct,
+    n_traces: u32,
+    dump_accuracy: Option<Arc<Mutex<BufWriter<File>>>>,
+    dump_timings: Option<Arc<Mutex<BufWriter<File>>>>,
+    diff: u32,
 ) -> CalibrationResult {
     let skip = 10;
     let n = 500;
@@ -306,9 +313,9 @@ fn calibrate<T: Hqc + Send>(
     let mut total_num_traces = 0;
     for i in 0..2 * n + skip {
         let (t, num_traces) = if i % 2 == 0 {
-            measure_timing::<T>(core, sk, fast)
+            measure_timing::<T>(core, sk, fast, n_traces)
         } else {
-            measure_timing::<T>(core, sk, &other())
+            measure_timing::<T>(core, sk, &other(), n_traces)
         };
         total_num_traces += num_traces;
         debug!(
@@ -391,24 +398,40 @@ fn calibrate<T: Hqc + Send>(
             debug!("new best threshold @ {best_thresh} with {correct} correct out of {total}");
         }
     }
+    if let Some(dump_timings) = dump_timings {
+        let mut dump_timings = dump_timings.lock().unwrap();
+        for t in fast_timings {
+            writeln!(dump_timings, "fast,{t},{diff}").unwrap();
+        }
+        for t in other_timings {
+            writeln!(dump_timings, "rand,{t},{diff}").unwrap();
+        }
+    }
 
     let prev_tpr = best_fast_correct as f64 / n as f64;
     let prev_tnr = best_other_correct as f64 / n as f64;
     info!("prev_tpr={prev_tpr} prev_tnr={prev_tnr}");
 
-    let mut fast_correct = 0;
-    let mut other_correct = 0;
-
     // Test oracle
     debug!("Testing oracle");
+    let mut fast_correct = 0;
+    let mut other_correct = 0;
     let mut fast_timings = Vec::new();
     let mut other_timings = Vec::new();
+    // let mut rng = rand::thread_rng();
+    // let random_id: String = (0..32)
+    //     .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+    //     .collect();
+    // let random_id_path = format!("data/test_traces_{random_id}.csv");
+    // let mut f = BufWriter::new(File::create(random_id_path).unwrap());
+    // writeln!(f, "class,time").unwrap();
     for i in 0..2 * n + skip {
         let (t, num_traces) = if i % 2 == 0 {
-            measure_timing::<T>(core, sk, fast)
+            measure_timing::<T>(core, sk, fast, n_traces)
         } else {
-            measure_timing::<T>(core, sk, &other())
+            measure_timing::<T>(core, sk, &other(), n_traces)
         };
+        // writeln!(f, "{},{}", if i % 2 == 0 { "fast" } else { "rand" }, t).unwrap();
         total_num_traces += num_traces;
         debug!(
             "{:>5} {i:>3}/{} {:>5} {:>5} cycles",
@@ -448,8 +471,12 @@ fn calibrate<T: Hqc + Send>(
 
     let tpr = fast_correct as f64 / n as f64;
     let tnr = other_correct as f64 / n as f64;
-    info!("tpr={tpr} tnr={tnr}");
-
+    let accuracy = (fast_correct + other_correct) as f64 / (2 * n) as f64;
+    info!("n_traces={n_traces} tpr={tpr} tnr={tnr} accuracy={accuracy}");
+    if let Some(dump_accuracy) = dump_accuracy {
+        let mut dump_accuracy = dump_accuracy.lock().unwrap();
+        writeln!(dump_accuracy, "{n_traces},{accuracy},{diff}").unwrap();
+    }
     CalibrationResult {
         threshold: best_thresh,
         tpr,
@@ -465,28 +492,23 @@ impl<T: Hqc + Send> SMTOracle<T> {
         salt: Option<&[u8]>,
         original_message: Vec<u8>,
     ) -> Result<(Self, CalibrationResult), Box<dyn Error>> {
-        let e = Poly::zero(T::VEC_N_SIZE_256);
-
-        // construct ciphertext
-        let r2 = Poly::zero(T::VEC_N_SIZE_256);
-
-        let mut u = Attack::<T>::shift_by(0);
-        let u_slice: &mut [u64] = &mut bytemuck::cast_slice_mut(&mut u.v)[..T::VEC_N_SIZE_64];
-        let er = T::encaps_chosen_inputs(
-            pk.as_ref(),
-            original_message.as_slice(),
-            bytemuck::cast_slice(u_slice),
-            bytemuck::cast_slice(r2.v.as_slice()),
-            bytemuck::cast_slice(e.v.as_slice()),
-            salt,
-        );
-        let fast = T::ciphertext_from_string(&er.ct);
+        let fast = get_fast_ciphertext::<T>(pk, original_message, salt);
         let core = CORE_ALLOCATOR.alloc();
-        let cr = calibrate::<T>(&core, &sk, &fast, || {
-            let oqs = T::oqs();
-            let ct = oqs.encapsulate(pk);
-            T::ciphertext_from_string(&ct.unwrap().0.bytes)
-        });
+        let n_traces = 100;
+        let cr = calibrate::<T>(
+            &core,
+            &sk,
+            &fast,
+            || {
+                let oqs = T::oqs();
+                let ct = oqs.encapsulate(pk);
+                T::ciphertext_from_string(&ct.unwrap().0.bytes)
+            },
+            n_traces,
+            None,
+            None,
+            0,
+        );
         Ok((
             Self {
                 core,
@@ -498,6 +520,28 @@ impl<T: Hqc + Send> SMTOracle<T> {
             cr,
         ))
     }
+}
+
+/// creates a fast ciphertext without any error or shifting
+/// useful to measure the SMT oracle's accuracy
+fn get_fast_ciphertext<T: Hqc + Send>(
+    pk: PublicKeyRef,
+    original_message: Vec<u8>,
+    salt: Option<&[u8]>,
+) -> Ct {
+    let e = Poly::zero(T::VEC_N_SIZE_256);
+    let r2 = Poly::zero(T::VEC_N_SIZE_256);
+    let mut u = Attack::<T>::shift_by(0);
+    let u_slice: &mut [u64] = &mut bytemuck::cast_slice_mut(&mut u.v)[..T::VEC_N_SIZE_64];
+    let er = T::encaps_chosen_inputs(
+        pk.as_ref(),
+        original_message.as_slice(),
+        bytemuck::cast_slice(u_slice),
+        bytemuck::cast_slice(r2.v.as_slice()),
+        bytemuck::cast_slice(e.v.as_slice()),
+        salt,
+    );
+    T::ciphertext_from_string(&er.ct)
 }
 
 fn rdpru32() -> u32 {
@@ -516,7 +560,7 @@ impl<T: Hqc + Send> SMTOracle<T> {}
 
 impl<T: Hqc + Send> SideChannelOracle for SMTOracle<T> {
     fn call(&mut self, _rng: &mut impl Rng, ct: &Ct) -> bool {
-        let (t, num_traces) = measure_timing::<T>(&self.core, &self.sk, ct);
+        let (t, num_traces) = measure_timing::<T>(&self.core, &self.sk, ct, 100);
         self.num_traces += num_traces;
         let outcome = t <= self.threshold;
         debug!(
@@ -599,12 +643,9 @@ impl<T: Hqc> SideChannelOracle for SimulatedLocalOracle<T> {
     fn call(&mut self, rng: &mut impl Rng, ct: &Ct) -> bool {
         let m2 = Self::decode(&self.sk, ct);
         let mut result = m2 == self.original;
-        match self.mode {
-            OracleMode::Perfect => {
-                debug!("perfect simulated oracle: {result}");
-                return result;
-            }
-            _ => {}
+        if let OracleMode::Perfect = self.mode {
+            debug!("perfect simulated oracle: {result}");
+            return result;
         };
         if !result {
             // there's a chance that depends on the message that the result will be wrong, if there's a decoding failure
@@ -1210,6 +1251,7 @@ impl<T: Hqc + Send> Attack<T> {
         salt: Option<Vec<u8>>,
         pk: PublicKeyRef,
         sk: SecretKeyRef,
+        additional_bits: u64,
     ) -> AttackStatistics {
         let type_name = std::any::type_name::<T>().split(':').last().unwrap();
         debug!("Recovering key for {type_name}");
@@ -1295,7 +1337,7 @@ impl<T: Hqc + Send> Attack<T> {
                             .iter()
                             .map(|x| (*x == BitStatus::KnownZero) as u64)
                             .sum::<u64>();
-                    let needed = (2 * T::PARAM_N * 50 / 100) as u64 + 5;
+                    let needed = (2 * T::PARAM_N * 50 / 100) as u64 + additional_bits;
                     debug!(
                         "Have {recovered}/{needed} bits in {:.02}s",
                         start.elapsed().as_secs_f64()
@@ -1567,12 +1609,12 @@ fn get_sibling() -> (usize, usize) {
     (a, b)
 }
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
-/// Simple program to greet a person
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
-struct Args {
+/// Perform attacks using either a simulated or a real SMT oracle.
+struct AttackArgs {
     /// Number of attacks
     #[arg(long, default_value_t = 1000)]
     num_attacks: u32,
@@ -1582,6 +1624,9 @@ struct Args {
 
     #[arg(long)]
     stats_file: PathBuf,
+
+    #[arg(long, default_value_t = 5)]
+    additional_bits: u64,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -1600,12 +1645,55 @@ struct OracleModeArgs {
     simulated_noise: Option<f64>,
 }
 
+/// Measure the oracle accuracy for various number of traces (n_traces are taken and then we compute their median).
+/// Optionally, dump the observed timings into a CSV file.
+#[derive(Parser, Debug, Clone)]
+#[command()]
+struct MeasureOracleArgs {
+    #[arg(long)]
+    num_keys: u32,
+
+    #[arg(long)]
+    /// Measure oracle accuracy for up to this many traces
+    max_n_traces: u32,
+
+    #[arg(long)]
+    /// Path to write n_traces dependent oracle accuracy to
+    dump_accuracy: Option<PathBuf>,
+
+    #[arg(long)]
+    /// Path to write timings of each trace to (including whether the timings were performed on a fast or slow ciphertext)
+    dump_timings: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum SCmd {
+    #[command(name = "attack")]
+    Attack(AttackArgs),
+    #[command(name = "measure")]
+    MeasureOracle(MeasureOracleArgs),
+}
+
+#[derive(Parser, Clone, Debug)]
+struct Cli {
+    #[command(subcommand)]
+    command: SCmd,
+}
+
 fn main() -> Result<(), anyhow::Error> {
-    let args = Args::parse();
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    let args = Cli::parse();
+    let attack_args = match &args.command {
+        SCmd::Attack(args) => Some(args),
+        SCmd::MeasureOracle(_) => None,
+    };
+    let measure_args = match &args.command {
+        SCmd::Attack(_) => None,
+        SCmd::MeasureOracle(args) => Some(args),
+    };
     debug!("Starting...");
 
     oqs::init();
@@ -1640,7 +1728,11 @@ fn main() -> Result<(), anyhow::Error> {
     });
     assert_eq!(TryInto::<u32>::try_into(pre.m.len()).unwrap(), T::PARAM_K);
 
-    let oracle_ty = if args.oracle_mode_args.smt {
+    let oracle_ty = if attack_args
+        .map(|args| args.oracle_mode_args.smt)
+        .unwrap_or(false)
+        || measure_args.map(|_| true).unwrap_or(false)
+    {
         let mut s = String::new();
         File::open("/sys/devices/system/cpu/smt/active")?.read_to_string(&mut s)?;
         if s.trim() != "1" {
@@ -1651,17 +1743,16 @@ fn main() -> Result<(), anyhow::Error> {
     } else {
         OracleTy::SimulatedLocal
     };
-    let oracle_mode = args
-        .oracle_mode_args
-        .simulated_noise
-        .map(|x| OracleMode::SimulatedNoise { failure_rate: x })
-        .or(args.oracle_mode_args.simulated_oracle_mode);
+    let oracle_mode = attack_args.as_ref().and_then(|args| {
+        args.oracle_mode_args
+            .simulated_noise
+            .map(|x| OracleMode::SimulatedNoise { failure_rate: x })
+            .or(args.oracle_mode_args.simulated_oracle_mode)
+    });
 
     info!("Running with oracle_ty={oracle_ty:?} oracle_mode={oracle_mode:?}");
 
     std::fs::create_dir_all("data").unwrap();
-    let path = args.stats_file;
-    let mut f = File::create(path).unwrap();
 
     let mut test_outcomes_str = String::new();
     for i in 0..pre.ecs.len() {
@@ -1672,189 +1763,282 @@ fn main() -> Result<(), anyhow::Error> {
         }
     }
 
-    f.write_all(
-        format!("key_bits,recovered_zeros_x,recovered_zeros_y,wrong_zeros_x,wrong_zeros_y,queries,traces,calibration_traces,threshold,tpr,tnr,attack_tpr,attack_tnr,duration_seconds,{test_outcomes_str}\n")
-            .as_bytes(),
-    )
-    .unwrap();
-
-    let f = Arc::new(std::sync::Mutex::new(f));
-
-    let n = args.num_attacks;
     if oracle_ty == OracleTy::SMTOracle {
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_cpus::get_physical())
             .build_global()
             .unwrap();
     }
-    let stats: Vec<_> = (0..n)
-        .into_par_iter()
-        .map(|i| {
-            let span = info_span!("attack", id = i);
-            let _enter = span.enter();
-            T::init_seed(i as u64);
-            let start = Instant::now();
-            let mut hasher = Sha256::new();
-            hasher.update(b"seed3_");
-            hasher.update(format!("{i}_").as_bytes());
-            let result = hasher.finalize();
-            let mut rng = ChaCha12Rng::from_seed(result.as_slice().try_into().unwrap());
-            let (pk, sk) = T::oqs().keypair().unwrap();
 
-            let salt = match T::LEAKAGE {
-                TimingLeakage::RejectionSampling => None,
-                TimingLeakage::DivisionLatency => Some({
-                    if oracle_ty == OracleTy::SimulatedLocal {
-                        debug!("Skipping salt generation for faster simulation");
-                        let mut salt = vec![0u8; T::VEC_K_SIZE_BYTES];
-                        rng.fill(salt.as_mut_slice());
-                        salt
-                    } else {
-                        T::find_low_division_latency_salt(&mut rng, (&pk).into(), &pre.m)
-                    }
-                }),
+    if let Some(measure_args) = measure_args {
+        let make_csv =
+            |fname: &Option<PathBuf>, header: &str| -> Option<Arc<Mutex<BufWriter<File>>>> {
+                fname.as_ref().map(|f| {
+                    let mut f = BufWriter::new(File::create(f).unwrap());
+                    f.write_all(header.as_bytes()).unwrap();
+                    Arc::new(std::sync::Mutex::new(f))
+                })
             };
-            let stats = match (oracle_ty, oracle_mode) {
-                (OracleTy::SimulatedLocal, Some(mode)) => {
-                    let mut inner =
-                        SimulatedLocalOracle::<T>::new(sk.to_owned(), pre.m.clone(), mode);
-                    let tr = match mode {
-                        OracleMode::Ideal | OracleMode::Perfect => 1.0,
-                        OracleMode::SimulatedNoise { failure_rate } => 1.0 - failure_rate,
-                    };
-                    Attack::<T>::recover_key(
-                        &mut rng,
-                        &pre,
-                        &mut inner,
-                        CalibrationResult {
-                            threshold: 0,
-                            tpr: tr,
-                            tnr: tr,
-                            num_traces: 0,
-                        },
-                        salt,
-                        (&pk).into(),
-                        (&sk).into(),
-                    )
-                }
-                (OracleTy::SMTOracle, None) => {
-                    let (mut inner, cr) = SMTOracle::<T>::new(
-                        sk.to_owned(),
-                        (&pk).into(),
-                        salt.as_deref(),
-                        pre.m.clone(),
-                    )
-                    .unwrap();
-                    debug!("Calibration result: {cr:?}");
+        let dump_accuracy = make_csv(&measure_args.dump_accuracy, "n_traces,accuracy,diff\n");
+        let dump_timings = make_csv(&measure_args.dump_timings, "ty,time,diff\n");
 
-                    let result = Attack::<T>::recover_key(
-                        &mut rng,
-                        &pre,
-                        &mut inner,
-                        cr.clone(),
-                        salt,
-                        (&pk).into(),
-                        (&sk).into(),
-                    );
-                    info!("Took {} traces", inner.num_traces);
-                    AttackStatistics {
-                        traces: Some(inner.num_traces),
-                        cr: Some(cr),
-                        ..result
-                    }
-                }
-                _ => {
-                    error!("Unsupported oracle config {oracle_ty:?} {oracle_mode:?}");
-                    panic!();
-                }
-            };
+        let n = measure_args.num_keys;
+        assert_eq!(oracle_ty, OracleTy::SMTOracle, "wrong oracle ty");
+        let completed = AtomicU32::new(0);
+        let _n: usize = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let span = info_span!("attack", id = i);
+                let _enter = span.enter();
+                T::init_seed(i as u64);
+                let mut hasher = Sha256::new();
+                hasher.update(b"seed3_");
+                hasher.update(format!("{i}_").as_bytes());
+                let result = hasher.finalize();
+                let mut rng = ChaCha12Rng::from_seed(result.as_slice().try_into().unwrap());
+                let (pk, sk) = T::oqs().keypair().unwrap();
 
-            AttackStatistics {
-                duration_seconds: start.elapsed().as_secs_f64(),
-                ..stats
-            }
-        })
-        .inspect(|s| {
-            let mut f = f.lock().unwrap();
-            let mut test_outcomes_str = String::new();
-            for (i, (false_count, true_count)) in s.test_outcomes.iter().enumerate() {
-                test_outcomes_str += &format!(
-                    "{false_count},{true_count}{}",
-                    if i != s.test_outcomes.len() - 1 {
-                        ","
-                    } else {
-                        ""
-                    }
+                assert!(
+                    matches!(T::LEAKAGE, TimingLeakage::DivisionLatency),
+                    "wrong leakage"
                 );
-            }
-            f.write_all(
-                format!(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-                    T::PARAM_N,
-                    s.recovered_zeros_x,
-                    s.recovered_zeros_y,
-                    s.wrong_zeros_x,
-                    s.wrong_zeros_y,
-                    s.queries,
-                    s.traces.map(|x| format!("{}", x)).unwrap_or("".to_owned()),
-                    s.cr.as_ref()
-                        .map(|x| format!("{}", x.num_traces))
-                        .unwrap_or("".to_owned()),
-                    s.cr.as_ref()
-                        .map(|x| format!("{}", x.threshold))
-                        .unwrap_or("".to_owned()),
-                    s.cr.as_ref()
-                        .map(|x| format!("{}", x.tpr))
-                        .unwrap_or("".to_owned()),
-                    s.cr.as_ref()
-                        .map(|x| format!("{}", x.tnr))
-                        .unwrap_or("".to_owned()),
-                    s.attack_tpr,
-                    s.attack_tnr,
-                    s.duration_seconds,
-                    test_outcomes_str,
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-            f.flush().unwrap();
-        })
-        .collect();
+                for min_diff in 0..=55 {
+                    let (salt, diff) =
+                        T::find_low_division_latency_salt(&mut rng, (&pk).into(), &pre.m, min_diff);
+                    assert_eq!(oracle_ty, OracleTy::SMTOracle);
+                    assert!(oracle_mode.is_none());
+                    let pk = (&pk).into();
+                    let fast = get_fast_ciphertext::<T>(pk, pre.m.clone(), Some(&salt));
+                    {
+                        let core = CORE_ALLOCATOR.alloc();
+                        let _cr = calibrate::<T>(
+                            &core,
+                            &sk,
+                            &fast,
+                            || {
+                                let oqs = T::oqs();
+                                let ct = oqs.encapsulate(pk);
+                                T::ciphertext_from_string(&ct.unwrap().0.bytes)
+                            },
+                            100,
+                            dump_accuracy.as_ref().map(Arc::clone),
+                            dump_timings.as_ref().map(Arc::clone),
+                            diff,
+                        );
+                    }
+                }
 
-    info!(
-        "Attack success chance: {}%",
-        stats
-            .iter()
-            .map(
-                |x| (x.recovered_zeros_x + x.recovered_zeros_y >= (T::PARAM_N + 5) as u64
-                    && x.wrong_zeros_x == 0
-                    && x.wrong_zeros_y == 0) as u64
-            )
-            .sum::<u64>() as f64
-            / n as f64
-            * 100.0
-    );
-    let mut qs: Vec<_> = stats.iter().map(|x| x.queries).collect();
-    qs.sort_unstable();
-    info!("Median queries: {}", qs[qs.len() / 2]);
-    info!(
-        "Mean zeros recovered: {}%",
-        stats
-            .iter()
-            .map(|x| x.recovered_zeros_x + x.recovered_zeros_y)
-            .sum::<u64>() as f64
-            / (n as u64 * 2 * T::PARAM_N as u64) as f64
-            * 100.0
-    );
-    info!(
-        "Attacks with wrong zeros: {}%",
-        stats
-            .iter()
-            .map(|x| (x.wrong_zeros_x + x.wrong_zeros_y > 0) as u64)
-            .sum::<u64>() as f64
-            / n as f64
-            * 100.0
-    );
+                let (salt, diff) =
+                    T::find_low_division_latency_salt(&mut rng, (&pk).into(), &pre.m, 55);
+                assert_eq!(oracle_ty, OracleTy::SMTOracle);
+                assert!(oracle_mode.is_none());
+                let pk = (&pk).into();
+                let fast = get_fast_ciphertext::<T>(pk, pre.m.clone(), Some(&salt));
+                {
+                    let core = CORE_ALLOCATOR.alloc();
+                    for n_traces in 1..=measure_args.max_n_traces {
+                        let _cr = calibrate::<T>(
+                            &core,
+                            &sk,
+                            &fast,
+                            || {
+                                let oqs = T::oqs();
+                                let ct = oqs.encapsulate(pk);
+                                T::ciphertext_from_string(&ct.unwrap().0.bytes)
+                            },
+                            n_traces,
+                            dump_accuracy.as_ref().map(Arc::clone),
+                            dump_timings.as_ref().map(Arc::clone),
+                            diff,
+                        );
+                    }
+                }
+                let v = completed.fetch_add(1, Ordering::SeqCst);
+                info!("Completed {} keys", v + 1);
+            })
+            .count();
+    } else if let Some(attack_args) = attack_args {
+        let path = &attack_args.stats_file;
+        let mut f = File::create(path).unwrap();
+        f.write_all(
+        format!("key_bits,recovered_zeros_x,recovered_zeros_y,wrong_zeros_x,wrong_zeros_y,queries,traces,calibration_traces,threshold,tpr,tnr,attack_tpr,attack_tnr,duration_seconds,{test_outcomes_str}\n")
+            .as_bytes(),
+    )
+    .unwrap();
+        let f = Arc::new(std::sync::Mutex::new(f));
+
+        let n = attack_args.num_attacks;
+        let stats: Vec<_> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let span = info_span!("attack", id = i);
+                let _enter = span.enter();
+                T::init_seed(i as u64);
+                let start = Instant::now();
+                let mut hasher = Sha256::new();
+                hasher.update(b"seed3_");
+                hasher.update(format!("{i}_").as_bytes());
+                let result = hasher.finalize();
+                let mut rng = ChaCha12Rng::from_seed(result.as_slice().try_into().unwrap());
+                let (pk, sk) = T::oqs().keypair().unwrap();
+
+                let salt = match T::LEAKAGE {
+                    TimingLeakage::RejectionSampling => None,
+                    TimingLeakage::DivisionLatency => Some({
+                        if oracle_ty == OracleTy::SimulatedLocal {
+                            debug!("Skipping salt generation for faster simulation");
+                            let mut salt = vec![0u8; T::VEC_K_SIZE_BYTES];
+                            rng.fill(salt.as_mut_slice());
+                            salt
+                        } else {
+                            T::find_low_division_latency_salt(&mut rng, (&pk).into(), &pre.m, 55).0
+                        }
+                    }),
+                };
+                let stats = match (oracle_ty, oracle_mode) {
+                    (OracleTy::SimulatedLocal, Some(mode)) => {
+                        let mut inner =
+                            SimulatedLocalOracle::<T>::new(sk.to_owned(), pre.m.clone(), mode);
+                        let tr = match mode {
+                            OracleMode::Ideal | OracleMode::Perfect => 1.0,
+                            OracleMode::SimulatedNoise { failure_rate } => 1.0 - failure_rate,
+                        };
+                        Attack::<T>::recover_key(
+                            &mut rng,
+                            &pre,
+                            &mut inner,
+                            CalibrationResult {
+                                threshold: 0,
+                                tpr: tr,
+                                tnr: tr,
+                                num_traces: 0,
+                            },
+                            salt,
+                            (&pk).into(),
+                            (&sk).into(),
+                            attack_args.additional_bits,
+                        )
+                    }
+                    (OracleTy::SMTOracle, None) => {
+                        let (mut inner, cr) = SMTOracle::<T>::new(
+                            sk.to_owned(),
+                            (&pk).into(),
+                            salt.as_deref(),
+                            pre.m.clone(),
+                        )
+                        .unwrap();
+                        debug!("Calibration result: {cr:?}");
+
+                        let result = Attack::<T>::recover_key(
+                            &mut rng,
+                            &pre,
+                            &mut inner,
+                            cr.clone(),
+                            salt,
+                            (&pk).into(),
+                            (&sk).into(),
+                            attack_args.additional_bits,
+                        );
+                        info!("Took {} traces", inner.num_traces);
+                        AttackStatistics {
+                            traces: Some(inner.num_traces),
+                            cr: Some(cr),
+                            ..result
+                        }
+                    }
+                    _ => {
+                        error!("Unsupported oracle config {oracle_ty:?} {oracle_mode:?}");
+                        panic!();
+                    }
+                };
+
+                AttackStatistics {
+                    duration_seconds: start.elapsed().as_secs_f64(),
+                    ..stats
+                }
+            })
+            .inspect(|s| {
+                let mut f = f.lock().unwrap();
+                let mut test_outcomes_str = String::new();
+                for (i, (false_count, true_count)) in s.test_outcomes.iter().enumerate() {
+                    test_outcomes_str += &format!(
+                        "{false_count},{true_count}{}",
+                        if i != s.test_outcomes.len() - 1 {
+                            ","
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                f.write_all(
+                    format!(
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                        T::PARAM_N,
+                        s.recovered_zeros_x,
+                        s.recovered_zeros_y,
+                        s.wrong_zeros_x,
+                        s.wrong_zeros_y,
+                        s.queries,
+                        s.traces.map(|x| format!("{}", x)).unwrap_or("".to_owned()),
+                        s.cr.as_ref()
+                            .map(|x| format!("{}", x.num_traces))
+                            .unwrap_or("".to_owned()),
+                        s.cr.as_ref()
+                            .map(|x| format!("{}", x.threshold))
+                            .unwrap_or("".to_owned()),
+                        s.cr.as_ref()
+                            .map(|x| format!("{}", x.tpr))
+                            .unwrap_or("".to_owned()),
+                        s.cr.as_ref()
+                            .map(|x| format!("{}", x.tnr))
+                            .unwrap_or("".to_owned()),
+                        s.attack_tpr,
+                        s.attack_tnr,
+                        s.duration_seconds,
+                        test_outcomes_str,
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+                f.flush().unwrap();
+            })
+            .collect();
+
+        info!(
+            "Attack success chance: {}%",
+            stats
+                .iter()
+                .map(
+                    |x| (x.recovered_zeros_x + x.recovered_zeros_y >= (T::PARAM_N + 5) as u64
+                        && x.wrong_zeros_x == 0
+                        && x.wrong_zeros_y == 0) as u64
+                )
+                .sum::<u64>() as f64
+                / n as f64
+                * 100.0
+        );
+        let mut qs: Vec<_> = stats.iter().map(|x| x.queries).collect();
+        qs.sort_unstable();
+        info!("Median queries: {}", qs[qs.len() / 2]);
+        info!(
+            "Mean zeros recovered: {}%",
+            stats
+                .iter()
+                .map(|x| x.recovered_zeros_x + x.recovered_zeros_y)
+                .sum::<u64>() as f64
+                / (n as u64 * 2 * T::PARAM_N as u64) as f64
+                * 100.0
+        );
+        info!(
+            "Attacks with wrong zeros: {}%",
+            stats
+                .iter()
+                .map(|x| (x.wrong_zeros_x + x.wrong_zeros_y > 0) as u64)
+                .sum::<u64>() as f64
+                / n as f64
+                * 100.0
+        );
+    }
 
     Ok(())
 }

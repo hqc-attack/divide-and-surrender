@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.27
+# v0.19.40
 
 using Markdown
 using InteractiveUtils
@@ -11,10 +11,10 @@ using Plots, DataFrames, CSV, Statistics, Format, StatsPlots, PGFPlotsX
 pgfplotsx()
 
 # ╔═╡ 5dcef064-9b40-4f86-831f-7ba09ce687ed
-datas = reverse([("smt", "smt_cal"), ("0.515", "0.485"), ("0.9", "0.1"), ("0.95", "0.05"), ("0.995", "0.005"), ("\\mathrm{ideal}", "ideal"), ("\\mathrm{perfect}", "perfect")])
+datas = reverse([("smt", "smt"), ("0.515", "0.485"), ("0.9", "0.1"), ("0.95", "0.05"), ("0.995", "0.005"), ("\\mathrm{ideal}", "ideal"), ("\\mathrm{perfect}", "perfect")])
 
 # ╔═╡ a4a82e7b-258d-4d8f-889b-da28895d7f2b
-df = CSV.File("data/smt_cal.csv") |> DataFrame
+df = CSV.File("data/smt.csv") |> DataFrame
 
 # ╔═╡ 8993f1f4-7686-4053-9b48-34447fabf417
 mean(df.test_outcomes_0_true ./ (df.test_outcomes_0_false .+ df.test_outcomes_0_true))
@@ -131,7 +131,7 @@ StatsPlots = "~0.15.6"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.10.0"
+julia_version = "1.10.2"
 manifest_format = "2.0"
 project_hash = "4e279f8f60dc8af3a685ef4ded561b70cbb2602a"
 
@@ -277,7 +277,7 @@ weakdeps = ["Dates", "LinearAlgebra"]
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.0.5+1"
+version = "1.1.0+0"
 
 [[deps.ConcurrentUtilities]]
 deps = ["Serialization", "Sockets"]
@@ -852,7 +852,7 @@ version = "1.3.5+1"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.23+2"
+version = "0.3.23+4"
 
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]

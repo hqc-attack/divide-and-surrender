@@ -17,3 +17,4 @@ figures
 *.log
 venv/
 *.tgz
+/hqc-submission_*/
