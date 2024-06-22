@@ -77,7 +77,8 @@ def load_all_data():
     dfs = [load_data(f"data/{n}.csv") for n in names]
     for n, df in zip(names, dfs):
         df["mode"] = cat_name(n)
-    return pd.concat(dfs)
+    if len(dfs) >= 1:
+        return pd.concat(dfs)
 
 
 def cat_name(name):
@@ -114,7 +115,10 @@ def oracle_calls_boxplots(df):
 
 def view_hqc_simulation_csv():
     df = load_all_data()
+    if df is None:
+        return None
     oracle_calls_boxplots(df)
+    return True
 
 
 def timings_with_diff(timings, diff_min=None, diff_max=None):
@@ -188,10 +192,8 @@ def main():
 
     plt.clf()
     # plt.margins(x=0,y=0)
-    try:
-        view_hqc_simulation_csv()
-    except FileNotFoundError as e:
-        print("Skipping oracle call requirements plot (Figure 12): {e}")
+    if view_hqc_simulation_csv() is None:
+        print(f"Skipping oracle call requirements plot (Figure 12): {e}")
     aspect = 1 / (4 / 3)
     w = 10
     size = (w, w * aspect)
@@ -226,7 +228,7 @@ def main():
         g.set_ylabel("Accuracy")
         g.figure.savefig("figures/n_traces_raw.pdf", bbox_inches='tight')
     except FileNotFoundError as e:
-        print("Skipping oracle accuracy plot (Figure 9): {e}")
+        print(f"Skipping oracle accuracy plot (Figure 9): {e}")
 
     try:
         if os.path.isfile("data/timings.csv.xz") and (not os.path.isfile('data/timings.csv')):
@@ -313,7 +315,7 @@ def main():
         )
         g.figure.savefig("figures/difference_of_means.pdf", bbox_inches='tight')
     except FileNotFoundError as e:
-        print("Skipping side-channel plots (Figure 10 and 11): {e}")
+        print(f"Skipping side-channel plots (Figure 10 and 11): {e}")
 
 if __name__ == "__main__":
     main()

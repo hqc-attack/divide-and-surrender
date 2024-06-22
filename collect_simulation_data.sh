@@ -3,11 +3,10 @@ export RUST_LOG=warn
 OPTS=${OPTS:-"--num-attacks=1000"}
 CMD="cargo run --release -- attack $OPTS"
 
-for bits in 5 100 500 1000 1500 2000 2500 2750 2875 3000 3062 3125 3250 3500 4000 5000 6000 7000; do
-    echo testing $bits additional bits
-    time $CMD --simulated-oracle-mode perfect --additional-bits $bits --stats-file data/additional_bits_$bits.csv
-done
-exit 0
+# for bits in 5 100 500 1000 1500 2000 2500 2750 2875 3000 3062 3125 3250 3500 4000 5000 6000 7000; do
+#     echo testing $bits additional bits
+#     time $CMD --simulated-oracle-mode perfect --additional-bits $bits --stats-file data/additional_bits_$bits.csv
+# done
 
 echo collecting data for idealized oracle
 $CMD --stats-file data/ideal.csv --simulated-oracle-mode ideal
