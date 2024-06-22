@@ -5,9 +5,7 @@ CMD="cargo run --release -- attack $OPTS"
 
 for bits in 5 100 500 1000 1500 2000 2500 2750 2875 3000 3062 3125 3250 3500 4000 5000 6000 7000; do
     echo testing $bits additional bits
-    if [ ! -f "data/additional_bits_$bits.csv" ]; then
-        time $CMD --simulated-oracle-mode perfect --additional-bits $bits --stats-file data/additional_bits_$bits.csv
-    fi
+    time $CMD --simulated-oracle-mode perfect --additional-bits $bits --stats-file data/additional_bits_$bits.csv
 done
 exit 0
 

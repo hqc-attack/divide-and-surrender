@@ -18,7 +18,9 @@ RUN cargo build && cargo build --release
 
 ADD nanoBench /app/nanoBench
 ADD visualize /app/visualize
-ADD *.jl pyproject.toml precomputation_128.json collect_* /app/
+ADD *.jl pyproject.toml precomputation_128.json collect_* Manifest.toml Project.toml /app/
+
+RUN julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
 ENV PATH="/app/venv/bin:$PATH"
 RUN mkdir figures data

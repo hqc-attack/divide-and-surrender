@@ -1,4 +1,5 @@
 import logging
+import subprocess
 
 # Disable debug logs for matplotlib (very verbose)
 rootlogger = logging.getLogger()
@@ -149,172 +150,170 @@ def main():
                 ab = int(file.removeprefix(prefix).removesuffix('.csv'))
                 additional_bits.append(ab)
                 additional_bits_dfs.append(pd.read_csv(os.path.join(root, file)))
-    additional_bits_success_rate = [
-        calculate_success_rate(df, additional_bits) for (additional_bits, df) in zip(additional_bits, additional_bits_dfs)
-    ]
-    queries = [
-        df.queries.median() for df in additional_bits_dfs
-    ]
+    if len(additional_bits) > 0:
+        additional_bits_success_rate = [
+            calculate_success_rate(df, additional_bits) for (additional_bits, df) in zip(additional_bits, additional_bits_dfs)
+        ]
+        queries = [
+            df.queries.median() for df in additional_bits_dfs
+        ]
 
 
-    # p = sortperm(additional_bits)
-    # additional_bits = applyperm(p, additional_bits)
-    # additional_bits_success_rate = applyperm(p, additional_bits_success_rate)
-    df = pd.DataFrame({
-        'Additional Bits': additional_bits,
-        'Success Rate': additional_bits_success_rate,
-        "Queries": queries,
-    })
-    df.sort_values('Additional Bits', inplace=True)
-    print(df)
+        # p = sortperm(additional_bits)
+        # additional_bits = applyperm(p, additional_bits)
+        # additional_bits_success_rate = applyperm(p, additional_bits_success_rate)
+        df = pd.DataFrame({
+            'Additional Bits': additional_bits,
+            'Success Rate': additional_bits_success_rate,
+            "Queries": queries,
+        })
+        df.sort_values('Additional Bits', inplace=True)
+        print(df)
 
-    g = sns.lineplot(df, x="Additional Bits", y="Success Rate", marker='^', label="Success Rate")
-    g.grid(False)
-    ax2 = plt.twinx()
-    ax2.grid(False)
-    sns.lineplot(df, x="Additional Bits", y="Queries", color="r", marker='P', ax=ax2, label="Queries")
+        g = sns.lineplot(df, x="Additional Bits", y="Success Rate", marker='^', label="Success Rate")
+        g.grid(False)
+        ax2 = plt.twinx()
+        ax2.grid(False)
+        sns.lineplot(df, x="Additional Bits", y="Queries", color="r", marker='P', ax=ax2, label="Queries")
 
-    lines, labels = g.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax2.legend(lines + lines2, labels + labels2, loc='right')
-    g.get_legend().remove()
+        lines, labels = g.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax2.legend(lines + lines2, labels + labels2, loc='right')
+        g.get_legend().remove()
 
-    # g.set_xscale('log')
-    g.figure.savefig("figures/additional_bits_success_rate.pdf", bbox_inches='tight')
+        # g.set_xscale('log')
+        g.figure.savefig("figures/additional_bits_success_rate.pdf", bbox_inches='tight')
+    else:
+        print("Skipping additional bits figure (not included in paper)")
 
     plt.clf()
     # plt.margins(x=0,y=0)
-    view_hqc_simulation_csv()
+    try:
+        view_hqc_simulation_csv()
+    except FileNotFoundError as e:
+        print("Skipping oracle call requirements plot (Figure 12): {e}")
     aspect = 1 / (4 / 3)
     w = 10
     size = (w, w * aspect)
 
-    # import re
+    try:
+        df = pd.read_csv("data/accuracy.csv")
+        fdf = df[(df["diff"] >= 55)]
+        # fdf = df[(df["diff"] >= 55) & (df["n_traces"] % 2 == 1)]
+        sdf = fdf.groupby("n_traces")["accuracy"].agg(
+            ["median", lambda x: np.percentile(x, 5), lambda x: np.percentile(x, 95)]
+        )
+        sdf.columns = ["median", "lo", "hi"]
+        # print(df)
 
-    # pattern = r".*n_traces=(\d+)\s.*accuracy=([0-9.]+).*"
-    # n_tracess = []
-    # accuracies = []
-    # with open("n_traces.log") as f:
-    #     for line in f.readlines():
-    #         match = re.search(pattern, line)
-    #         if match is not None:
-    #             n_traces = int(match.group(1))
-    #             accuracy = float(match.group(2))
-    #             n_tracess.append(n_traces)
-    #             accuracies.append(accuracy)
-    # df = pd.DataFrame(data={})
-    df = pd.read_csv("accuracy.csv")
-    fdf = df[(df["diff"] >= 55)]
-    # fdf = df[(df["diff"] >= 55) & (df["n_traces"] % 2 == 1)]
-    sdf = fdf.groupby("n_traces")["accuracy"].agg(
-        ["median", lambda x: np.percentile(x, 5), lambda x: np.percentile(x, 95)]
-    )
-    sdf.columns = ["median", "lo", "hi"]
-    # print(df)
+        plt.clf()
+        g = sns.lineplot(sdf, x="n_traces", y="median")
+        g.set_xlabel("Number of Traces")
+        g.set_ylabel("Accuracy")
+        g.fill_between(
+            sdf.index,
+            sdf.lo,
+            sdf.hi,
+            color="blue",
+            alpha=0.3,
+            label="5th to 95th Percentile",
+        )
+        g.figure.savefig("figures/n_traces.pdf", bbox_inches='tight')
 
-    plt.clf()
-    g = sns.lineplot(sdf, x="n_traces", y="median")
-    g.set_xlabel("Number of Traces")
-    g.set_ylabel("Accuracy")
-    g.fill_between(
-        sdf.index,
-        sdf.lo,
-        sdf.hi,
-        color="blue",
-        alpha=0.3,
-        label="5th to 95th Percentile",
-    )
-    g.figure.savefig("figures/n_traces.pdf", bbox_inches='tight')
+        plt.clf()
+        g = sns.scatterplot(fdf, x="n_traces", y="accuracy")
+        g.set_xlabel("Number of Traces")
+        g.set_ylabel("Accuracy")
+        g.figure.savefig("figures/n_traces_raw.pdf", bbox_inches='tight')
+    except FileNotFoundError as e:
+        print("Skipping oracle accuracy plot (Figure 9): {e}")
 
-    plt.clf()
-    g = sns.scatterplot(fdf, x="n_traces", y="accuracy")
-    g.set_xlabel("Number of Traces")
-    g.set_ylabel("Accuracy")
-    g.figure.savefig("figures/n_traces_raw.pdf", bbox_inches='tight')
-
-    timings = pd.read_csv("timings.csv")
-    timings["ty"] = timings["ty"].map(
-        {
-            "fast": "Fast",
-            "rand": "Random",
-        }
-    )
-    ftimings = timings.rename(columns={"ty": "Ciphertext Timing"})
-    # ftimings = timings[(timings['diff'] >= 55) & (12350 <= timings['time']) & (timings['time'] <= 12600)].copy()
-    lo = 12350
-    hi = 12600
-    ftimings = ftimings[(lo <= ftimings["time"]) & (ftimings["time"] <= hi)]
-
-    plt.clf()
-    g = sns.histplot(
-        timings_with_diff(ftimings, 55, 55),
-        x="time",
-        hue="Ciphertext Timing",
-        multiple="layer",
-        bins=50,
-        hue_order=["Fast", "Random"],
-    )
-    g.set_xlabel("Side Channel Measurement (Cycles)")
-    # g.set_ylabel("Frequency", rotation=270, color="k", labelpad=15)
-    g.set_ylabel("Frequency", labelpad=15)
-    # g.set_aspect(aspect)
-    # g.figure.set_size_inches(size)
-    g.figure.savefig("figures/timing_histogram.pdf", bbox_inches='tight')
-    print("Done with hist")
-
-    sds = []
-    max_diff = 55
-    timing_diffs = range(max_diff + 1)
-    difference_of_means = []
-    for i in timing_diffs:
-        sub_ftimings = timings_with_diff(ftimings, i, i)
-        print(sub_ftimings)
-
-        def p_of(ty):
-            c = Counter(sub_ftimings[sub_ftimings["Ciphertext Timing"] == ty]["time"])
-            t = c.total()
-            return defaultdict(lambda: 0, {k: v / t for (k, v) in c.items()})
-
-        def mean_of(ty):
-            return sub_ftimings[sub_ftimings["Ciphertext Timing"] == ty]["time"].mean()
-
-        pf = p_of("Fast")
-        pr = p_of("Random")
-        sds.append(sd(range(lo, hi + 1), pf, pr))
-        difference_of_means.append(mean_of("Random") - mean_of("Fast"))
-        print(sds)
-        print(difference_of_means)
-    # ftimings = ftimings.groupby('ty')
-    plt.clf()
-    g = sns.lineplot(
-        pd.DataFrame(
+    try:
+        if os.path.isfile("data/timings.csv.xz") and (not os.path.isfile('data/timings.csv')):
+            subprocess.run(["unxz", "-k", "data/timings.csv.xz"])
+        timings = pd.read_csv("data/timings.csv")
+        timings["ty"] = timings["ty"].map(
             {
-                "Computed Timing Difference (Cycles)": timing_diffs,
-                "Statistical Distance": sds,
+                "fast": "Fast",
+                "rand": "Random",
             }
-        ),
-        x="Computed Timing Difference (Cycles)",
-        y="Statistical Distance",
-    )
-    # g.set_box_aspect(1)
-    # g.set_aspect(aspect)
-    g.figure.set_size_inches(size)
-    g.figure.savefig("figures/sd.pdf", bbox_inches='tight')
+        )
+        ftimings = timings.rename(columns={"ty": "Ciphertext Timing"})
+        # ftimings = timings[(timings['diff'] >= 55) & (12350 <= timings['time']) & (timings['time'] <= 12600)].copy()
+        lo = 12350
+        hi = 12600
+        ftimings = ftimings[(lo <= ftimings["time"]) & (ftimings["time"] <= hi)]
 
-    plt.clf()
-    g = sns.lineplot(
-        pd.DataFrame(
-            {
-                "Computed Timing Difference (Cycles)": timing_diffs,
-                "Mean Timing Deviation (Cycles)": difference_of_means,
-            }
-        ),
-        x="Computed Timing Difference (Cycles)",
-        y="Mean Timing Deviation (Cycles)",
-    )
-    g.figure.savefig("figures/difference_of_means.pdf", bbox_inches='tight')
+        plt.clf()
+        g = sns.histplot(
+            timings_with_diff(ftimings, 55, 55),
+            x="time",
+            hue="Ciphertext Timing",
+            multiple="layer",
+            bins=50,
+            hue_order=["Fast", "Random"],
+        )
+        g.set_xlabel("Side Channel Measurement (Cycles)")
+        # g.set_ylabel("Frequency", rotation=270, color="k", labelpad=15)
+        g.set_ylabel("Frequency", labelpad=15)
+        # g.set_aspect(aspect)
+        # g.figure.set_size_inches(size)
+        g.figure.savefig("figures/timing_histogram.pdf", bbox_inches='tight')
+        print("Done with hist")
 
+        sds = []
+        max_diff = 55
+        timing_diffs = range(max_diff + 1)
+        difference_of_means = []
+        for i in timing_diffs:
+            sub_ftimings = timings_with_diff(ftimings, i, i)
+            print(sub_ftimings)
 
+            def p_of(ty):
+                c = Counter(sub_ftimings[sub_ftimings["Ciphertext Timing"] == ty]["time"])
+                t = c.total()
+                return defaultdict(lambda: 0, {k: v / t for (k, v) in c.items()})
+
+            def mean_of(ty):
+                return sub_ftimings[sub_ftimings["Ciphertext Timing"] == ty]["time"].mean()
+
+            pf = p_of("Fast")
+            pr = p_of("Random")
+            sds.append(sd(range(lo, hi + 1), pf, pr))
+            difference_of_means.append(mean_of("Random") - mean_of("Fast"))
+            print(sds)
+            print(difference_of_means)
+        # ftimings = ftimings.groupby('ty')
+        plt.clf()
+        g = sns.lineplot(
+            pd.DataFrame(
+                {
+                    "Computed Timing Difference (Cycles)": timing_diffs,
+                    "Statistical Distance": sds,
+                }
+            ),
+            x="Computed Timing Difference (Cycles)",
+            y="Statistical Distance",
+        )
+        # g.set_box_aspect(1)
+        # g.set_aspect(aspect)
+        g.figure.set_size_inches(size)
+        g.figure.savefig("figures/sd.pdf", bbox_inches='tight')
+        
+        plt.clf()
+        g = sns.lineplot(
+            pd.DataFrame(
+                {
+                    "Computed Timing Difference (Cycles)": timing_diffs,
+                    "Mean Timing Deviation (Cycles)": difference_of_means,
+                }
+            ),
+            x="Computed Timing Difference (Cycles)",
+            y="Mean Timing Deviation (Cycles)",
+        )
+        g.figure.savefig("figures/difference_of_means.pdf", bbox_inches='tight')
+    except FileNotFoundError as e:
+        print("Skipping side-channel plots (Figure 10 and 11): {e}")
 
 if __name__ == "__main__":
     main()
