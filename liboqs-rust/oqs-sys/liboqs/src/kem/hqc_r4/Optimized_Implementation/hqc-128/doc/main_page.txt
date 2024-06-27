@@ -1,0 +1,92 @@
+/*! \mainpage HQC: a Public-Key Encryption scheme
+ *
+ *  1. SUBMISSION OVERVIEW
+ *  ----------------------
+ *
+ *  In order to fully understand this submission, one should note that HQC is a public-key encryption scheme submitted as a KEM for which NIST "standard conversion techniques" should be applied (see NIST FAQ#13). In addition, the aforementionned KEM is obtained by applying a conversion technique to a PKE. In order to avoid any confusion, we may refer to:
+ *
+ * - <b>HQC_PKE IND-CPA</b>: HQC PKE IND-CPA scheme given in the Supporting Documentation.
+ * - <b>HQC_KEM IND-CCA2</b>: HQC KEM IND-CCA2 scheme obtained by applying the transformation from \cite cryptoeprint:2017:604 to the HQC PKE IND-CPA scheme. It is the implementation provided.
+ * - <b>HQC_PKE IND-CCA2</b>: HQC PKE IND-CCA2 scheme obtained by applying NIST "standard conversion techniques" to the HQC KEM IND-CCA2 scheme. It is the scheme submitted.<br />
+ *
+ *
+ * Three parameters sets denoted respectively HQC-128, HQC-192 and HQC-256 are provided as explained in the supporting documentation. Each parameter set folder is organized as follows:
+ *
+ *  - <b>bin/</b>: Files generated during compilation
+ *  - <b>doc/</b>: Technical documentation of the scheme
+ *  - <b>lib/</b>: Third party libraries used
+ *  - <b>src/</b>: Source code of the scheme
+ *  - <b>doxygen.conf</b>: Documentation configuration file
+ *  - <b>Makefile</b>: Makefile
+ *
+ *  <br />
+ *
+ *  2. INSTALLATION INSTRUCTIONS
+ *  ----------------------------
+ *
+ *  <h3>2.1 Requirements</h3>
+ *
+ *  The following softwares and libraries are required: <b>make</b> and <b>gcc</b>. The target machine must support <b>AVX2</b> instructions.
+ *
+ *  <h3>2.2 Compilation Step</h3>
+ *
+ *  Let <b>X</b> denotes <b>-128</b>, <b>-192</b> or <b>-256</b>  depending on the parameter set considered. HQC can be compiled in three differents ways:
+ *  - Execute <b>make hqcX</b> to compile a working example of the scheme. Run <b>bin/hqcX</b> to execute all the steps of the scheme and display theirs respective performances.
+ *  - Execute <b>make hqcX-kat</b> to compile the NIST KAT generator. Run <b>bin/hqcX-kat</b> to generate KAT files.
+ *  - Execute <b>make hqcX-verbose</b> to compile a working example of the scheme in verbose mode. Run <b>bin/hqcX-verbose</b> to generate intermediate values.
+ *
+ *  During compilation, the following files are created inside the <b>bin/build</b> folder:
+ *  - <b>fips202.o</b>: Hash function SHA3
+ *  - <b>shake_ds.o</b>: Functions to perform domain separation based on SHAKE256
+ *  - <b>shake_prng.o</b>: Functions to generate random values based on SHAKE256
+ *  - <b>parsing.o</b>: Functions to parse public key, secret key and ciphertext of the scheme.
+ *  - <b>gf2x.o</b>: AVX2 function to multiply polynomials.
+ *  - <b>vector.o</b>: Functions to manipulate vectors.
+ *  - <b>reed_solomon.o</b>: Functions to encode and decode messages using Reed-Solomon codes \cite lin1983error (either in normal mode or verbose mode).
+ *  - <b>reed_muller.o</b>: <b>AVX2</b> functions to encode and decode messages using Reed-Muller codes \cite macwilliams1977theory (decoding uses <b>AVX2</b> instructions).
+ *  - <b>fft.o</b>: Functions for the additive Fast Fourier Transform \cite gao2010additive \cite bernstein2013mcbits.
+ *  - <b>gf.o</b>: Functions for Galois field manipulation.
+ *  - <b>code.o</b>: Functions to encode and decode messages using concatenated codes (either in normal mode or verbose mode).
+ *  - <b>hqc.o</b>: The HQC PKE IND-CPA scheme (either in normal mode or verbose mode).
+ *  - <b>kem.o</b>: The HQC KEM IND-CCA2 scheme (either in normal mode or verbose mode).
+ *
+ * <br />
+ *
+ *  3. DOCUMENTATION
+ *  ----------------
+ *
+ *  <h3>3.1 Requirements</h3>
+ *
+ *  The following softwares are required: <b>doxygen</b> and <b>bibtex</b>.
+ *
+ *  <h3>3.2 Generation Step</h3>
+ *
+ *  - Run <b>doxygen doxygen.conf</b> to generate the code documentation
+ *  - Browse <b>doc/html/index.html</b> to read the documentation
+ *
+ * <br />
+  *
+ *  4. ADDITIONAL INFORMATIONS
+ *  --------------------------
+ *
+ *  <h3>4.1 Implementation overview</h3>
+ *
+ *  The <b>HQC_KEM IND-CCA2</b> scheme is defined in the api.h and parameters.h files and implemented in kem.c.
+ *  The latter is based on the <b>HQC_PKE IND-CPA</b> scheme that is defined in hqc.h and implemented in hqc.c.
+ *  The <b>HQC_PKE IND-CPA</b> scheme uses Concatenated codes (see code.h and code.c) which is the combination of Reed-Solomon codes \cite lin1983error (see reed_solomon.h and reed_solomon.c)
+ *  and Reed-Muller codes \cite macwilliams1977theory (see reed_muller.h and reed_muller.c).
+ *  Roots computation for Reed-Solomon codes is done by additive Fast Fourier Transform \cite gao2010additive \cite bernstein2013mcbits (see fft.h and fft.c).
+ *  The decoding of Reed-Muller codes is written using <b>AVX2</b> instructions.
+ *  Files gf.h and gf.c provide the implementation of the underlying Galois field.
+ *  The files gf2x.c and gf2x.h provide the function performing the multiplication of two polynomials (uses <b>AVX2</b> instructions).
+ *  As public key, secret key and ciphertext can be manipulated either with their mathematical representations or as bit strings, the files parsing.h and parsing.c provide functions to switch between these two representations.
+ *  The files <b>shake_ds.h</b> and <b>shake_ds.c</b> provide functions to perform domain separation based on SHAKE256. The file <b>domains.h</b> contains SHAKE-256 domains separation. Random values needed for the scheme are provided by functions in files <b>shake_prng.h</b> and <b>shake_prng.h</b>. Finally, the files <b>fips202.h</b> and <b>fips202.c</b> (inside the <b>lib/fips202</b> folder) contain an implementation of SHA3.
+ *
+ *  <h3>4.2 Public key, secret key, ciphertext and shared secret</h3>
+ *
+ *  The public key, secret key and ciphertext are respectively composed of (<b>h</b>, <b>s</b>), (<b>x</b>, <b>y</b>, <b>sigma</b>) and (<b>u</b>, <b>v</b>, <b>salt</b>).
+ *  The shared secret is the output of the hash of <b>m</b>, <b>u</b> and <b>v</b> using SHAKE256.
+ *  In order to shorten the keys, the public key is stored as (<b>seed1</b>, <b>s</b>) and the secret key is stored as (<b>seed2</b>, <b>sigma</b>).
+ *  To this end, the seed expander provided by the NIST was used along with 40 bytes long seeds.
+ *
+ */
