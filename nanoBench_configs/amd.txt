@@ -1,0 +1,4 @@
+# Performance monitoring events for AMD Family 17h processors.
+# See Section 2.1.13.3 of AMD's "Preliminary Processor Programming Reference" (Apr. 2017)
+
+076.00 LsNotHaltedCyc
