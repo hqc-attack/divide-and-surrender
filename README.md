@@ -86,7 +86,7 @@ The implementation was adapted to fit into liboqs. Further, a data-race on a glo
 
 ## System configuration
 
-<detail>
+<details>
 
 <summary>Details about the used hardware and system configuration</summary>
 
@@ -163,7 +163,7 @@ Flags:                           fpu vme de pse tsc msr pae mce cx8 apic sep mtr
                                  sid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip rdpid overflow_recov succor smca sev sev_es
 ```
 
-</detail>
+</details>
 
 ## Implementation Tour
 
