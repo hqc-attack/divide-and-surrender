@@ -241,10 +241,6 @@ def main():
             }
         )
         ftimings = timings.rename(columns={"ty": "Ciphertext Timing"})
-        # ftimings = timings[(timings['diff'] >= 55) & (12350 <= timings['time']) & (timings['time'] <= 12600)].copy()
-        lo = 12350
-        hi = 12600
-        ftimings = ftimings[(lo <= ftimings["time"]) & (ftimings["time"] <= hi)]
 
         plt.clf()
         g = sns.histplot(
@@ -281,6 +277,8 @@ def main():
 
             pf = p_of("Fast")
             pr = p_of("Random")
+            lo = min(min(pf.keys()), min(pr.keys()))
+            hi = max(max(pr.keys()), max(pr.keys()))
             sds.append(sd(range(lo, hi + 1), pf, pr))
             difference_of_means.append(mean_of("Random") - mean_of("Fast"))
             print(sds)
